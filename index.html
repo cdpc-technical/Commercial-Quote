@@ -185,6 +185,10 @@
         <label class="field-label" for="stations">Rodent Stations <span style="color:var(--cd-gray-400); font-weight:600;">(optional)</span></label>
         <input class="field-input" type="number" id="stations" placeholder="e.g. 6" min="0" inputmode="numeric">
       </div>
+      <div>
+        <label class="field-label" for="flylights">Fly Lights <span style="color:var(--cd-gray-400); font-weight:600;">(optional)</span></label>
+        <input class="field-input" type="number" id="flylights" placeholder="e.g. 2" min="0" inputmode="numeric">
+      </div>
     </div>
 
     <div class="addon-row">
@@ -198,6 +202,11 @@
         <input type="checkbox" id="roaches">
         <span class="addon-box"></span>
         <span class="addon-text">German Roaches <span class="addon-price">+$450 initial</span></span>
+      </label>
+      <label class="addon-check">
+        <input type="checkbox" id="flies">
+        <span class="addon-box"></span>
+        <span class="addon-text">Small Flies <span class="addon-price">+$250 initial</span></span>
       </label>
     </div>
 
@@ -228,8 +237,9 @@
    Base rates come from the PRICING table below (sourced from
    Commercial_pricing.xlsx). How a quote is built:
    - Square footage maps to a 2,500 sq-ft bracket in PRICING.
-   - The bracket's exact values are the OFFICE base (multiplier x1.00).
-   - Account type applies its multiplier on top of the base.
+   - The bracket's exact values are the price for every account type
+     (same service, same size = same price).
+   - Account type only controls which frequencies are shown.
    - Each displayed figure is that value +/-5%, low rounded DOWN
      and high rounded UP to the nearest $25.
    - Rodent stations: $50/station one-time -> initial,
@@ -495,18 +505,27 @@ const RANGE_PCT = 0.05;
 const STATION_INSTALL_COST = 50;
 const STATION_SERVICE_UPCHARGE = 5;
 
+// Fly lights. $300 each, one-time -> INITIAL only (no recurring charge).
+const FLYLIGHT_COST = 300;
+
 // Add-on services. One-time charges added to INITIAL only. Stackable.
 const ADDON_RATS = 800;
 const ADDON_ROACHES = 450;
 
-// Account type: complexity multiplier (layered on spreadsheet base) + frequencies offered.
+// Small Flies: +$250 initial AND a flat per-service recurring charge that varies by
+// frequency (added directly to each service price, like rodent stations).
+const ADDON_FLIES_INITIAL = 250;
+const ADDON_FLIES_PER_SERVICE = { monthly: 50, bimonthly: 75, quarterly: 100 };
+
+// Account type: all types are priced straight off the spreadsheet base (same service,
+// same size = same price). Type only controls which frequencies are offered.
 const ACCOUNT_TYPES = {
   office:      { label: "Office",      multiplier: 1.00, frequencies: ["monthly","bimonthly","quarterly"] },
-  warehouse:   { label: "Warehouse",   multiplier: 1.10, frequencies: ["monthly","bimonthly","quarterly"] },
-  retail:      { label: "Retail",      multiplier: 1.05, frequencies: ["monthly","bimonthly","quarterly"] },
-  restaurant:  { label: "Restaurant",  multiplier: 1.45, frequencies: ["monthly"] },
-  gas_station: { label: "Gas Station", multiplier: 1.35, frequencies: ["monthly"] },
-  food_market: { label: "Food Market", multiplier: 1.40, frequencies: ["monthly"] },
+  warehouse:   { label: "Warehouse",   multiplier: 1.00, frequencies: ["monthly","bimonthly","quarterly"] },
+  retail:      { label: "Retail",      multiplier: 1.00, frequencies: ["monthly","bimonthly","quarterly"] },
+  restaurant:  { label: "Restaurant",  multiplier: 1.00, frequencies: ["monthly"] },
+  gas_station: { label: "Gas Station", multiplier: 1.00, frequencies: ["monthly"] },
+  food_market: { label: "Food Market", multiplier: 1.00, frequencies: ["monthly"] },
 };
 
 const FREQ_LABELS = { monthly: "Monthly", bimonthly: "Bi-Monthly", quarterly: "Quarterly" };
@@ -549,8 +568,10 @@ function calc() {
   const typeKey = document.getElementById("type").value;
   const sqft = parseFloat(sqftRaw);
   const stations = Math.max(0, parseInt(document.getElementById("stations").value) || 0);
+  const flylights = Math.max(0, parseInt(document.getElementById("flylights").value) || 0);
   const ratsOn = document.getElementById("rats").checked;
   const roachesOn = document.getElementById("roaches").checked;
+  const fliesOn = document.getElementById("flies").checked;
   const results = document.getElementById("results");
 
   if (!sqftRaw || isNaN(sqft) || sqft <= 0 || !typeKey) {
@@ -581,18 +602,23 @@ function calc() {
   const stationInstall  = stations * STATION_INSTALL_COST;     // one-time -> initial
   const stationUpcharge = stations * STATION_SERVICE_UPCHARGE; // recurring -> every monthly bill
 
-  // Add-on services (one-time, initial only, stackable)
-  const addonTotal = (ratsOn ? ADDON_RATS : 0) + (roachesOn ? ADDON_ROACHES : 0);
+  // Fly lights (one-time, initial only)
+  const flylightTotal = flylights * FLYLIGHT_COST;
 
-  // Initial: exact base x type multiplier, + station install + add-ons, then +/-5% rounded.
-  const initRange = rangeFromBase(bracket.i * m, stationInstall + addonTotal);
+  // Add-on services (one-time, initial only, stackable)
+  const addonTotal = (ratsOn ? ADDON_RATS : 0) + (roachesOn ? ADDON_ROACHES : 0) + (fliesOn ? ADDON_FLIES_INITIAL : 0);
+
+  // Initial: exact base x type multiplier, + station install + fly lights + add-ons, then +/-5% rounded.
+  const initRange = rangeFromBase(bracket.i * m, stationInstall + flylightTotal + addonTotal);
 
   // Frequency boxes: single PER-SERVICE price (base x type multiplier + station
   // upcharge per visit), plus the per-month equivalent (service price / months covered).
   const baseByFreq = { monthly: bracket.m, bimonthly: bracket.b, quarterly: bracket.q };
   const freqBoxes = type.frequencies.map((f) => {
-    const perService = (baseByFreq[f] * m) + stationUpcharge;
     const monthsPer = FREQ_MONTHS_PER_SERVICE[f];
+    // Small flies adds a flat per-service charge that varies by frequency.
+    const fliesPerService = fliesOn ? ADDON_FLIES_PER_SERVICE[f] : 0;
+    const perService = (baseByFreq[f] * m) + stationUpcharge + fliesPerService;
     const perMonth = perService / monthsPer;
     const featured = (f === "monthly") ? "featured" : "";
     // Monthly: service IS the monthly cost, so show one figure. Others: show both.
@@ -615,6 +641,7 @@ function calc() {
     : "";
   const initExtras = [];
   if (stationInstall > 0) initExtras.push(`${money(stationInstall)} station install`);
+  if (flylightTotal > 0) initExtras.push(`${money(flylightTotal)} fly lights`);
   if (addonTotal > 0) initExtras.push(`${money(addonTotal)} add-ons`);
   const initSubText = initExtras.length
     ? `One-time first treatment + ${initExtras.join(" + ")}`
@@ -625,9 +652,16 @@ function calc() {
          <span class="station-line-val">+${money(stationInstall)} initial &nbsp;·&nbsp; +${money(stationUpcharge)}/mo</span>
        </div>`
     : "";
+  const flylightLine = flylights > 0
+    ? `<div class="station-line">
+         <span class="station-line-label">&#128161; Fly Lights (${flylights} &times; ${money(FLYLIGHT_COST)})</span>
+         <span class="station-line-val">+${money(flylightTotal)} initial</span>
+       </div>`
+    : "";
   const addonLines = [
     ratsOn ? `<div class="station-line"><span class="station-line-label">&#128001; Rat Control</span><span class="station-line-val">+${money(ADDON_RATS)} initial</span></div>` : "",
     roachesOn ? `<div class="station-line"><span class="station-line-label">&#129714; German Roaches</span><span class="station-line-val">+${money(ADDON_ROACHES)} initial</span></div>` : "",
+    fliesOn ? `<div class="station-line"><span class="station-line-label">&#129701; Small Flies (+${money(ADDON_FLIES_PER_SERVICE.monthly)}/${money(ADDON_FLIES_PER_SERVICE.bimonthly)}/${money(ADDON_FLIES_PER_SERVICE.quarterly)} per service by frequency)</span><span class="station-line-val">+${money(ADDON_FLIES_INITIAL)} initial</span></div>` : "",
   ].join("");
   const overMaxNote = overMax
     ? `<div class="warn-box" style="border-left-color:#c0392b; background:#fdecea; border-color:#f0c0ba; color:#922;"><strong>Over 600,000 sq ft.</strong> This exceeds the pricing table — figures shown use the 600,000 sq ft rate. Quote large accounts manually.</div>`
@@ -662,11 +696,12 @@ function calc() {
         </div>
 
         ${stationLine}
+        ${flylightLine}
         ${addonLines}
         ${overMaxNote}
 
         <div class="warn-box">
-          <strong>Estimate only.</strong> All recurring service is billed monthly regardless of frequency. ${stations > 0 ? "Station service upcharge is included in the monthly figures above. " : ""}Final pricing subject to on-site inspection, infestation severity, and account-specific factors.
+          <strong>Estimate only.</strong> All recurring service is billed monthly regardless of frequency. ${(stations > 0 || fliesOn) ? "Recurring add-on charges are included in the monthly figures above. " : ""}Final pricing subject to on-site inspection, infestation severity, and account-specific factors.
         </div>
 
       </div>
@@ -675,9 +710,11 @@ function calc() {
 
 document.getElementById("sqft").addEventListener("input", calc);
 document.getElementById("stations").addEventListener("input", calc);
+document.getElementById("flylights").addEventListener("input", calc);
 document.getElementById("type").addEventListener("change", calc);
 document.getElementById("rats").addEventListener("change", calc);
 document.getElementById("roaches").addEventListener("change", calc);
+document.getElementById("flies").addEventListener("change", calc);
 </script>
 </body>
 </html>
